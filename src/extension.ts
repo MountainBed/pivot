@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { SnapshotTreeProvider, SnapshotItem } from './snapshot/treeProvider';
+import { SnapshotTreeProvider } from './snapshot/treeProvider';
 import { registerCommands } from './commands/registerCommands';
 
 let snapshotTreeProvider: SnapshotTreeProvider;
