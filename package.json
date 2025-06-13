@@ -44,6 +44,24 @@
       ]
     },
     "menus": {
+      "commandPalette": [
+        {
+          "command": "pivot.saveSnapshot",
+          "title": "Pivot: Save Snapshot"
+        },
+        {
+          "command": "pivot.deleteAllSnapshots",
+          "title": "Pivot: Delete All Snapshots"
+        },
+        {
+          "command": "pivot.listSnapshots",
+          "title": "Pivot: List Snapshots"
+        },
+        {
+          "command": "pivot.restoreSnapshot",
+          "title": "Pivot: Restore Snapshot"
+        }
+      ],
       "view/item/context": [
         {
           "command": "pivot.restoreSpecificSnapshot",
