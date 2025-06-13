@@ -1,0 +1,174 @@
+import * as vscode from 'vscode';
+import { Snapshot, TabGroupSnapshot, TabSnapshot } from './types';
+
+export async function saveSnapshot(context: vscode.ExtensionContext, snapshotTreeProvider: { refresh: () => void }, statusBarItem: vscode.StatusBarItem) {
+	const snapshotData = context.workspaceState.get<{ snapshots: Snapshot[] }>('pivot.snapshots', { snapshots: [] });
+
+	const newSnapshotNumber = snapshotData.snapshots.length + 1;
+	const defaultName = `Snapshot ${newSnapshotNumber}`;
+	const newSnapshotName = await vscode.window.showInputBox({
+		prompt: 'Name your snapshot',
+		value: defaultName,
+		placeHolder: 'Enter a name for this snapshot'
+	}) || defaultName;
+
+	const tabGroups: TabGroupSnapshot[] = vscode.window.tabGroups.all.map((group, groupIndex) => {
+		const tabs: TabSnapshot[] = group.tabs
+			.filter(tab => tab.input && (tab.input as any).uri)
+			.map(tab => {
+				const uri = (tab.input as any).uri.toString();
+				const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === uri);
+				let cursor = undefined;
+				if (editor) {
+					const pos = editor.selection.active;
+					cursor = { line: pos.line, character: pos.character };
+				}
+				return {
+					uri,
+					cursor,
+					isActive: tab.isActive,
+					isPinned: tab.isPinned,
+					isDirty: tab.isDirty
+				};
+			});
+
+		return {
+			groupIndex,
+			viewColumn: group.viewColumn,
+			isActive: group.isActive,
+			tabs,
+			size: group.tabs.length,
+			hasActiveTab: group.tabs.some(tab => tab.isActive)
+		};
+	});
+
+	const activeEditor = vscode.window.activeTextEditor;
+	const activeFile = activeEditor ? activeEditor.document.uri.toString() : undefined;
+	const activeGroupIndex = activeEditor ? vscode.window.tabGroups.all.findIndex(group => group.isActive) : -1;
+
+	const newSnapshot: Snapshot = {
+		name: newSnapshotName,
+		timestamp: Date.now(),
+		tabGroups,
+		activeFile,
+		activeGroupIndex,
+		totalGroups: tabGroups.length,
+		openFiles: tabGroups.flatMap(group => group.tabs)
+	};
+
+	snapshotData.snapshots.push(newSnapshot);
+
+	await context.workspaceState.update('pivot.snapshots', snapshotData);
+
+	statusBarItem.text = `📸 Saved "${newSnapshotName}"`;
+	statusBarItem.show();
+	setTimeout(() => statusBarItem.hide(), 3000);
+
+	snapshotTreeProvider.refresh();
+}
+
+export async function deleteAllSnapshots(context: vscode.ExtensionContext, snapshotTreeProvider: { refresh: () => void }) {
+	await context.workspaceState.update('pivot.snapshots', { snapshots: [] });
+	vscode.window.showInformationMessage('All pivot snapshots have been deleted.');
+	snapshotTreeProvider.refresh();
+}
+
+export async function listSnapshots(context: vscode.ExtensionContext) {
+	const snapshotData = context.workspaceState.get<{ snapshots: Snapshot[] }>('pivot.snapshots', { snapshots: [] });
+	if (!snapshotData.snapshots.length) {
+		vscode.window.showInformationMessage('No pivot snapshots found.');
+		return;
+	}
+
+	const items = snapshotData.snapshots.map(snap => ({
+		label: snap.name,
+		description: new Date(snap.timestamp).toLocaleString(),
+		detail: (snap.openFiles && snap.openFiles.length > 0)
+			? snap.openFiles.map(f => {
+				try {
+					return vscode.workspace.asRelativePath(vscode.Uri.parse(f.uri), false).split(/[\\\/]/).pop();
+				} catch {
+					return f.uri;
+				}
+			}).join(', ')
+			: ''
+	}));
+
+	await vscode.window.showQuickPick(items, {
+		placeHolder: 'Saved Pivot Snapshots',
+		canPickMany: false
+	});
+}
+
+export async function restoreSnapshot(context: vscode.ExtensionContext) {
+	const snapshotData = context.workspaceState.get<{ snapshots: Snapshot[] }>('pivot.snapshots', { snapshots: [] });
+	if (!snapshotData.snapshots.length) {
+		vscode.window.showInformationMessage('No pivot snapshots found to restore.');
+		return;
+	}
+
+	const items = snapshotData.snapshots.map((snap, index) => ({
+		label: snap.name,
+		description: new Date(snap.timestamp).toLocaleString(),
+		detail: `${snap.tabGroups ? snap.tabGroups.reduce((total: number, group: TabGroupSnapshot) => total + group.tabs.length, 0) : snap.openFiles?.length || 0} files`,
+		index: index
+	}));
+
+	const selected = await vscode.window.showQuickPick(items, {
+		placeHolder: 'Select a snapshot to restore',
+		canPickMany: false
+	});
+
+	if (!selected) {
+		return;
+	}
+
+	const snapshot = snapshotData.snapshots[selected.index];
+	await restoreSnapshotLayout(snapshot);
+}
+
+export async function restoreSpecificSnapshot(snapshot: Snapshot) {
+	await restoreSnapshotLayout(snapshot);
+}
+
+export async function restoreSnapshotLayout(snapshot: Snapshot) {
+	await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+
+	let allFiles: TabSnapshot[] = [];
+	if (snapshot.tabGroups && snapshot.tabGroups.length > 0) {
+		allFiles = snapshot.tabGroups.flatMap((group: TabGroupSnapshot) => group.tabs);
+	} else {
+		allFiles = snapshot.openFiles || [];
+	}
+
+	const openedEditors: vscode.TextEditor[] = [];
+	for (const file of allFiles) {
+		try {
+			const uri = vscode.Uri.parse(file.uri);
+			const document = await vscode.workspace.openTextDocument(uri);
+			const editor = await vscode.window.showTextDocument(document, { preview: false });
+
+			if (file.cursor && editor) {
+				const position = new vscode.Position(file.cursor.line, file.cursor.character);
+				editor.selection = new vscode.Selection(position, position);
+				editor.revealRange(new vscode.Range(position, position));
+			}
+
+			openedEditors.push(editor);
+		} catch (error) {
+			vscode.window.showWarningMessage(`Could not open file: ${file.uri}`);
+		}
+	}
+
+	if (snapshot.activeFile) {
+		try {
+			const activeUri = vscode.Uri.parse(snapshot.activeFile);
+			const activeDocument = await vscode.workspace.openTextDocument(activeUri);
+			await vscode.window.showTextDocument(activeDocument);
+		} catch (error) {
+			// Active file couldn't be opened, that's ok
+		}
+	}
+
+	vscode.window.showInformationMessage(`✅ Restored "${snapshot.name}" (${allFiles.length} files)`);
+} 
