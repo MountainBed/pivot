@@ -134,32 +134,34 @@ export async function restoreSpecificSnapshot(snapshot: Snapshot) {
 export async function restoreSnapshotLayout(snapshot: Snapshot) {
 	await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 
-	let allFiles: TabSnapshot[] = [];
+	// If we have tab groups, restore them properly
 	if (snapshot.tabGroups && snapshot.tabGroups.length > 0) {
-		allFiles = snapshot.tabGroups.flatMap((group: TabGroupSnapshot) => group.tabs);
+		await restoreTabGroups(snapshot.tabGroups);
 	} else {
-		allFiles = snapshot.openFiles || [];
-	}
+		// Fallback to old format
+		const allFiles = snapshot.openFiles || [];
+		const openedEditors: vscode.TextEditor[] = [];
+		
+		for (const file of allFiles) {
+			try {
+				const uri = vscode.Uri.parse(file.uri);
+				const document = await vscode.workspace.openTextDocument(uri);
+				const editor = await vscode.window.showTextDocument(document, { preview: false });
 
-	const openedEditors: vscode.TextEditor[] = [];
-	for (const file of allFiles) {
-		try {
-			const uri = vscode.Uri.parse(file.uri);
-			const document = await vscode.workspace.openTextDocument(uri);
-			const editor = await vscode.window.showTextDocument(document, { preview: false });
+				if (file.cursor && editor) {
+					const position = new vscode.Position(file.cursor.line, file.cursor.character);
+					editor.selection = new vscode.Selection(position, position);
+					editor.revealRange(new vscode.Range(position, position));
+				}
 
-			if (file.cursor && editor) {
-				const position = new vscode.Position(file.cursor.line, file.cursor.character);
-				editor.selection = new vscode.Selection(position, position);
-				editor.revealRange(new vscode.Range(position, position));
+				openedEditors.push(editor);
+			} catch (error) {
+				vscode.window.showWarningMessage(`Could not open file: ${file.uri}`);
 			}
-
-			openedEditors.push(editor);
-		} catch (error) {
-			vscode.window.showWarningMessage(`Could not open file: ${file.uri}`);
 		}
 	}
 
+	// Set active file if specified
 	if (snapshot.activeFile) {
 		try {
 			const activeUri = vscode.Uri.parse(snapshot.activeFile);
@@ -170,5 +172,64 @@ export async function restoreSnapshotLayout(snapshot: Snapshot) {
 		}
 	}
 
-	vscode.window.showInformationMessage(`✅ Restored "${snapshot.name}" (${allFiles.length} files)`);
+	const totalFiles = snapshot.tabGroups 
+		? snapshot.tabGroups.reduce((total, group) => total + group.tabs.length, 0)
+		: snapshot.openFiles?.length || 0;
+	
+	vscode.window.showInformationMessage(`✅ Restored "${snapshot.name}" (${totalFiles} files)`);
+}
+
+async function restoreTabGroups(tabGroups: TabGroupSnapshot[]) {
+	// Sort groups by viewColumn to ensure proper order
+	const sortedGroups = [...tabGroups].sort((a, b) => a.viewColumn - b.viewColumn);
+	
+	for (let i = 0; i < sortedGroups.length; i++) {
+		const group = sortedGroups[i];
+		
+		// Open the first file in the group to create the tab group
+		if (group.tabs.length > 0) {
+			try {
+				const firstFile = group.tabs[0];
+				const uri = vscode.Uri.parse(firstFile.uri);
+				const document = await vscode.workspace.openTextDocument(uri);
+				
+				// Use the saved viewColumn for proper positioning
+				const editor = await vscode.window.showTextDocument(document, { 
+					preview: false,
+					viewColumn: group.viewColumn
+				});
+
+				// Restore cursor position for first file
+				if (firstFile.cursor && editor) {
+					const position = new vscode.Position(firstFile.cursor.line, firstFile.cursor.character);
+					editor.selection = new vscode.Selection(position, position);
+					editor.revealRange(new vscode.Range(position, position));
+				}
+
+				// Open remaining files in the same group
+				for (let j = 1; j < group.tabs.length; j++) {
+					const file = group.tabs[j];
+					try {
+						const fileUri = vscode.Uri.parse(file.uri);
+						const fileDocument = await vscode.workspace.openTextDocument(fileUri);
+						const fileEditor = await vscode.window.showTextDocument(fileDocument, { 
+							preview: false,
+							viewColumn: group.viewColumn // Use the group's viewColumn
+						});
+
+						// Restore cursor position
+						if (file.cursor && fileEditor) {
+							const position = new vscode.Position(file.cursor.line, file.cursor.character);
+							fileEditor.selection = new vscode.Selection(position, position);
+							fileEditor.revealRange(new vscode.Range(position, position));
+						}
+					} catch (error) {
+						vscode.window.showWarningMessage(`Could not open file: ${file.uri}`);
+					}
+				}
+			} catch (error) {
+				vscode.window.showWarningMessage(`Could not open first file in group: ${group.tabs[0]?.uri}`);
+			}
+		}
+	}
 } 
