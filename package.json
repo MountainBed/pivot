@@ -3,6 +3,8 @@
   "displayName": "pivot",
   "description": "An extension to take a point-in-time snapshot of your current workspace, so that you can pivot to your next task and restore it at a later time.",
   "version": "0.0.1",
+  "publisher": "mountainbed",
+  "icon": "images/pivot-icon.png",
   "engines": {
     "vscode": "^1.93.1"
   },
