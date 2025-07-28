@@ -2,7 +2,7 @@
   "name": "pivot",
   "displayName": "pivot",
   "description": "An extension to take a point-in-time snapshot of your current workspace, so that you can pivot to your next task and restore it at a later time.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "mountainbed",
   "icon": "images/pivot-icon.png",
   "repository": {
@@ -10,7 +10,7 @@
     "url": "https://github.com/MountainBed/pivot"
   },
   "engines": {
-    "vscode": "^1.93.1"
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Other"
